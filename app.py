@@ -504,8 +504,33 @@ def appointment_covers_slot(row, day: date, slot: str) -> bool:
     return start_dt <= slot_dt < end_dt
 
 
+def slot_datetime(day: date, slot: str) -> datetime | None:
+    try:
+        slot_hour, slot_minute = [int(part) for part in slot.split(":")[:2]]
+        return datetime.combine(day, time(slot_hour, slot_minute))
+    except (TypeError, ValueError):
+        return None
+
+
+def slot_phase(row, day: date, slot: str) -> str:
+    start_dt = parse_datetime_from_row(row)
+    slot_dt = slot_datetime(day, slot)
+    if start_dt is None or slot_dt is None:
+        return ""
+
+    end_dt = start_dt + timedelta(minutes=safe_duration(row.get("duracion_minutos"), 60))
+    if slot_dt == start_dt and slot_dt + timedelta(minutes=SLOT_MINUTES) >= end_dt:
+        return "single"
+    if slot_dt == start_dt:
+        return "start"
+    if slot_dt + timedelta(minutes=SLOT_MINUTES) >= end_dt:
+        return "end"
+
+    return "middle"
+
+
 def render_calendar_html(df: pd.DataFrame, week_days: list[date]) -> str:
-    scored = add_risk_scores(df)
+    appointments_df = df.copy()
     slots = time_slots()
     headers = "".join(f"<th>{escape(day_label(day))}</th>" for day in week_days)
     rows = []
@@ -513,36 +538,46 @@ def render_calendar_html(df: pd.DataFrame, week_days: list[date]) -> str:
     for slot in slots:
         cells = [f"<td class='time-cell'>{slot}</td>"]
         for day in week_days:
-            if scored.empty:
-                appointments = scored
+            if appointments_df.empty:
+                appointments = appointments_df
             else:
-                appointments = scored[
-                    scored.apply(lambda row: appointment_covers_slot(row, day, slot), axis=1)
-                ]
-            blocks = []
-            for appointment in appointments.itertuples():
-                row = appointment._asdict()
-                bg, fg = status_style(row)
-                starts_here = normalize_time(row.get("hora", "")) == slot
-                title = escape(f"{row.get('cliente', '')} - {row.get('servicio', '')}")
-                status = escape(str(row.get("estado", "")))
-                risk = escape(str(row.get("riesgo_no_show", "")))
-                duration = safe_duration(row.get("duracion_minutos", 60))
-                text = (
-                    f"<strong>{title}</strong><br>"
-                    f"{status} · riesgo {risk}<br>"
-                    f"{duration} min"
-                    if starts_here
-                    else f"<span>{title}</span>"
-                )
-                blocks.append(
-                    "<div class='appointment-block' "
-                    f"style='background:{bg}; color:{fg}; border-color:{fg};'>"
-                    f"{text}</div>"
-                )
+                appointments = appointments_df[
+                    appointments_df.apply(
+                        lambda row: appointment_covers_slot(row, day, slot),
+                        axis=1,
+                    )
+                ].sort_values(["hora", "cliente", "servicio"])
 
-            content = "".join(blocks)
-            cells.append(f"<td class='calendar-cell'>{content}</td>")
+            if appointments.empty:
+                cells.append("<td class='calendar-cell empty-cell'></td>")
+                continue
+
+            appointment = appointments.iloc[0]
+            row = appointment.to_dict()
+            bg, fg = status_style(row)
+            phase = slot_phase(row, day, slot)
+            duration = safe_duration(row.get("duracion_minutos", 60))
+            extra_count = len(appointments) - 1
+            overlap = f"<span class='overlap'>+{extra_count}</span>" if extra_count else ""
+
+            if phase in ["start", "single"]:
+                content = (
+                    "<div class='appointment-text'>"
+                    f"<strong>{escape(str(row.get('cliente', '')))}</strong><br>"
+                    f"{escape(str(row.get('servicio', '')))}<br>"
+                    f"{escape(str(row.get('estado', '')))} · {duration} min"
+                    f"{overlap}"
+                    "</div>"
+                )
+            else:
+                content = f"<span class='continuation'>{overlap}</span>"
+
+            cells.append(
+                "<td "
+                f"class='calendar-cell occupied-cell appointment-{phase}' "
+                f"style='background:{bg}; color:{fg}; border-color:{bg};'>"
+                f"{content}</td>"
+            )
 
         rows.append(f"<tr>{''.join(cells)}</tr>")
 
@@ -571,11 +606,11 @@ def render_calendar_html(df: pd.DataFrame, week_days: list[date]) -> str:
             border: 1px solid #374151;
         }}
         .calendar-table td {{
-            height: 54px;
+            height: 42px;
             vertical-align: top;
             border: 1px solid #e5e7eb;
             background: #ffffff;
-            padding: 4px;
+            padding: 0;
             font-size: 12px;
         }}
         .calendar-table .time-cell {{
@@ -586,14 +621,52 @@ def render_calendar_html(df: pd.DataFrame, week_days: list[date]) -> str:
             text-align: center;
             vertical-align: middle;
         }}
-        .appointment-block {{
-            border-left: 4px solid;
+        .calendar-cell {{
+            position: relative;
+            box-sizing: border-box;
+        }}
+        .empty-cell {{
+            background: #ffffff;
+        }}
+        .occupied-cell {{
+            border-left-width: 4px;
+            border-right-width: 4px;
+        }}
+        .appointment-start {{
+            border-top-width: 4px;
+            border-top-left-radius: 6px;
+            border-top-right-radius: 6px;
+        }}
+        .appointment-single {{
+            border-width: 4px;
             border-radius: 6px;
-            padding: 5px 6px;
-            margin-bottom: 3px;
-            min-height: 34px;
+        }}
+        .appointment-middle {{
+            border-top-color: transparent !important;
+            border-bottom-color: transparent !important;
+        }}
+        .appointment-end {{
+            border-bottom-width: 4px;
+            border-bottom-left-radius: 6px;
+            border-bottom-right-radius: 6px;
+        }}
+        .appointment-text {{
+            padding: 6px 7px;
             line-height: 1.25;
             box-sizing: border-box;
+            min-height: 100%;
+        }}
+        .continuation {{
+            display: block;
+            min-height: 100%;
+            opacity: 0.35;
+        }}
+        .overlap {{
+            position: absolute;
+            right: 5px;
+            bottom: 3px;
+            font-weight: 700;
+            font-size: 11px;
         }}
     </style>
     <div class="calendar-wrap">
