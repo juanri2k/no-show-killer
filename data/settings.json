@@ -1,0 +1,12 @@
+{
+  "business_name": "No-Show Killer",
+  "business_whatsapp_number": "",
+  "currency": "EUR",
+  "default_appointment_duration_minutes": 60,
+  "reminder_hours_before": 24,
+  "confirmation_deadline_hours_before": 5,
+  "reminder_message_template": "Hola {cliente}, confirma tu cita en {business_name} el {fecha} a las {hora} para {servicio}. Responde CONFIRMAR o CANCELAR.",
+  "whatsapp_provider": "manual",
+  "whatsapp_api_token": "",
+  "whatsapp_sender_id": ""
+}
